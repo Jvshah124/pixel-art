@@ -45,6 +45,21 @@
       border: 2px solid #333;
     }
     
+    #palette-container {
+      display: flex;
+      justify-content: center;
+      gap: 5px;
+      margin: 10px 0;
+      flex-wrap: wrap;
+    }
+    
+    .palette-color {
+      width: 24px;
+      height: 24px;
+      border: 2px solid #333;
+      cursor: pointer;
+    }
+    
     #canvas-container {
       margin: 0 auto;
       display: inline-block;
@@ -94,7 +109,7 @@
   </style>
 </head>
 <body>
-  <h1>Pixel Art Creator</h1>
+  <h1>Pixel Art Creator - Jv Shah</h1>
   
   <div id="toolbar">
     <select id="grid-size">
@@ -112,11 +127,23 @@
       <option value="erase">Erase</option>
     </select>
     
+    <select id="palette-select">
+      <option value="custom">Custom</option>
+      <option value="nes">NES</option>
+      <option value="gameboy">Game Boy</option>
+      <option value="pico8">PICO-8</option>
+      <option value="cga">CGA</option>
+    </select>
+    
     <button id="clear-btn">Clear</button>
+    <button id="undo-btn">Undo (Ctrl+Z)</button>
+    <button id="redo-btn">Redo (Ctrl+Y)</button>
     <button id="add-frame-btn">Add Frame</button>
     <button id="export-png-btn">Export PNG</button>
     <button id="export-gif-btn">Export GIF</button>
   </div>
+  
+  <div id="palette-container"></div>
   
   <div id="canvas-container">
     <canvas id="pixel-canvas" width="320" height="320"></canvas>
@@ -139,12 +166,28 @@
     let frames = [];
     let currentFrame = 0;
     
+    // Undo/redo stacks
+    let undoStack = [];
+    let redoStack = [];
+    
+    // Predefined palettes
+    const palettes = {
+      custom: [],
+      nes: ['#7C7C7C', '#0000FC', '#0000BC', '#4428BC', '#940084', '#A80020', '#A81000', '#881400', '#503000', '#007800', '#006800', '#005800', '#004058', '#000000', '#000000', '#000000'],
+      gameboy: ['#0F380F', '#306230', '#8BAC0F', '#9BBC0F'],
+      pico8: ['#000000', '#1D2B53', '#7E2553', '#008751', '#AB5236', '#5F574F', '#C2C3C7', '#FFF1E8', '#FF004D', '#FFA300', '#FFEC27', '#00E436', '#29ADFF', '#83769C', '#FF77A8', '#FFCCAA'],
+      cga: ['#000000', '#55FFFF', '#FF55FF', '#FFFFFF']
+    };
+    
     // Initialize
     initCanvas();
+    updatePaletteDisplay();
     
     // Event listeners
     document.getElementById('color-picker').addEventListener('input', (e) => {
       currentColor = e.target.value;
+      document.getElementById('palette-select').value = 'custom';
+      updatePaletteDisplay();
     });
     
     document.getElementById('tool-select').addEventListener('change', (e) => {
@@ -157,12 +200,20 @@
       initCanvas();
     });
     
+    document.getElementById('palette-select').addEventListener('change', (e) => {
+      updatePaletteDisplay();
+    });
+    
     document.getElementById('clear-btn').addEventListener('click', () => {
+      saveToUndoStack();
       frames[currentFrame] = createBlankFrame();
       drawCurrentFrame();
     });
     
+    document.getElementById('undo-btn').addEventListener('click', undo);
+    document.getElementById('redo-btn').addEventListener('click', redo);
     document.getElementById('add-frame-btn').addEventListener('click', () => {
+      saveToUndoStack();
       frames.push(createBlankFrame());
       currentFrame = frames.length - 1;
       updateTimeline();
@@ -171,6 +222,19 @@
     
     document.getElementById('export-png-btn').addEventListener('click', exportPNG);
     document.getElementById('export-gif-btn').addEventListener('click', exportGIF);
+    
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey) {
+        if (e.key === 'z') {
+          e.preventDefault();
+          undo();
+        } else if (e.key === 'y') {
+          e.preventDefault();
+          redo();
+        }
+      }
+    });
     
     canvas.addEventListener('mousedown', startDrawing);
     canvas.addEventListener('mousemove', draw);
@@ -181,6 +245,8 @@
     function initCanvas() {
       frames = [createBlankFrame()];
       currentFrame = 0;
+      undoStack = [];
+      redoStack = [];
       drawCurrentFrame();
       updateTimeline();
     }
@@ -227,9 +293,11 @@
     
     // Drawing logic
     let isDrawing = false;
+    let lastDrawnIndex = -1;
     
     function startDrawing(e) {
       isDrawing = true;
+      saveToUndoStack();
       draw(e);
     }
     
@@ -242,6 +310,10 @@
       
       if (x >= 0 && x < gridSize && y >= 0 && y < gridSize) {
         const index = y * gridSize + x;
+        
+        // Skip if drawing on same pixel continuously
+        if (index === lastDrawnIndex && currentTool !== 'fill') return;
+        lastDrawnIndex = index;
         
         switch (currentTool) {
           case 'pencil':
@@ -261,6 +333,7 @@
     
     function stopDrawing() {
       isDrawing = false;
+      lastDrawnIndex = -1;
     }
     
     // Flood fill algorithm
@@ -276,6 +349,68 @@
       if (x < gridSize - 1) floodFill(x + 1, y, targetColor, replacementColor);
       if (y > 0) floodFill(x, y - 1, targetColor, replacementColor);
       if (y < gridSize - 1) floodFill(x, y + 1, targetColor, replacementColor);
+    }
+    
+    // Palette functions
+    function updatePaletteDisplay() {
+      const paletteContainer = document.getElementById('palette-container');
+      paletteContainer.innerHTML = '';
+      
+      const selectedPalette = document.getElementById('palette-select').value;
+      const colors = palettes[selectedPalette];
+      
+      if (colors && colors.length > 0) {
+        colors.forEach(color => {
+          const colorDiv = document.createElement('div');
+          colorDiv.className = 'palette-color';
+          colorDiv.style.backgroundColor = color;
+          colorDiv.addEventListener('click', () => {
+            currentColor = color;
+            document.getElementById('color-picker').value = color;
+          });
+          paletteContainer.appendChild(colorDiv);
+        });
+      }
+    }
+    
+    // Undo/redo functions
+    function saveToUndoStack() {
+      // Save a deep copy of the current frame
+      undoStack.push({
+        frame: [...frames[currentFrame]],
+        frameIndex: currentFrame
+      });
+      redoStack = []; // Clear redo stack on new action
+    }
+    
+    function undo() {
+      if (undoStack.length === 0) return;
+      
+      const state = undoStack.pop();
+      redoStack.push({
+        frame: [...frames[state.frameIndex]],
+        frameIndex: state.frameIndex
+      });
+      
+      frames[state.frameIndex] = state.frame;
+      currentFrame = state.frameIndex;
+      drawCurrentFrame();
+      updateTimeline();
+    }
+    
+    function redo() {
+      if (redoStack.length === 0) return;
+      
+      const state = redoStack.pop();
+      undoStack.push({
+        frame: [...frames[state.frameIndex]],
+        frameIndex: state.frameIndex
+      });
+      
+      frames[state.frameIndex] = state.frame;
+      currentFrame = state.frameIndex;
+      drawCurrentFrame();
+      updateTimeline();
     }
     
     // Animation timeline
