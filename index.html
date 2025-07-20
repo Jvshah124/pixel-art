@@ -11,6 +11,7 @@
       margin: 0;
       padding: 20px;
       text-align: center;
+      touch-action: none; /* Important for mobile drawing */
     }
     
     h1 {
@@ -34,6 +35,7 @@
       font-family: inherit;
       cursor: pointer;
       border-radius: 4px;
+      font-size: 14px;
     }
     
     button:hover {
@@ -70,6 +72,10 @@
       background: white;
       box-shadow: 0 0 10px rgba(0,0,0,0.2);
       position: relative;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
     }
     
     #pixel-canvas {
@@ -85,6 +91,7 @@
       gap: 5px;
       max-width: 800px;
       padding: 5px;
+      -webkit-overflow-scrolling: touch;
     }
     
     .animation-frame {
@@ -164,10 +171,41 @@
       box-sizing: border-box;
       transform: translate(-50%, -50%);
     }
+
+    /* Loading Indicator */
+    .loader {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 20px;
+      border-radius: 5px;
+      z-index: 1000;
+    }
+
+    /* Mobile-specific styles */
+    @media (max-width: 768px) {
+      #toolbar {
+        gap: 5px;
+      }
+      
+      button, select {
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      
+      #pixel-canvas {
+        width: 280px;
+        height: 280px;
+      }
+    }
   </style>
 </head>
 <body>
-  <h1>Pixel Art Creator</h1>
+  <h1>Pixel Art Creator - Jv Shah</h1>
   <p>Design • Animate • Create</p>
   
   <div id="toolbar">
@@ -227,6 +265,9 @@
       <div id="character-templates"></div>
     </div>
   </div>
+
+  <!-- Loading Indicator -->
+  <div class="loader" id="loader">Preparing GIF... Please wait</div>
   
   <footer class="copyright">
     Built by <a href="https://x.com/JvShah124" target="_blank" rel="noopener">Jv Shah</a>
@@ -246,6 +287,8 @@
     let undoStack = [];
     let redoStack = [];
     const brushPreview = document.querySelector('.brush-preview');
+    const loader = document.getElementById('loader');
+    let isDrawing = false;
 
     // Color Palettes
     const palettes = {
@@ -353,9 +396,8 @@
       });
     }
 
-    let isDrawing = false;
-
     function startDrawing(e) {
+      e.preventDefault();
       isDrawing = true;
       saveToUndoStack();
       draw(e);
@@ -364,9 +406,18 @@
     function draw(e) {
       if (!isDrawing) return;
       
-      const rect = canvas.getBoundingClientRect();
-      const x = Math.floor((e.clientX - rect.left) / cellSize);
-      const y = Math.floor((e.clientY - rect.top) / cellSize);
+      let x, y;
+      
+      // Handle both touch and mouse events
+      if (e.touches) {
+        const rect = canvas.getBoundingClientRect();
+        x = Math.floor((e.touches[0].clientX - rect.left) / cellSize);
+        y = Math.floor((e.touches[0].clientY - rect.top) / cellSize);
+      } else {
+        const rect = canvas.getBoundingClientRect();
+        x = Math.floor((e.clientX - rect.left) / cellSize);
+        y = Math.floor((e.clientY - rect.top) / cellSize);
+      }
       
       if (x >= 0 && x < gridSize && y >= 0 && y < gridSize) {
         if (currentTool === 'fill') {
@@ -420,9 +471,19 @@
         return;
       }
       
+      let clientX, clientY;
+      
+      if (e.touches) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+      
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
       const size = brushSize * cellSize;
       
       brushPreview.style.width = `${size}px`;
@@ -590,15 +651,30 @@
         return;
       }
       
-      alert('GIF export requires FFmpeg.wasm - loading now (may take a moment)...');
-      
       try {
-        // Dynamically load FFmpeg
-        const { createFFmpeg, fetchFile } = FFmpeg;
-        const ffmpeg = createFFmpeg({ log: true });
-        await ffmpeg.load();
+        // Show loading indicator
+        loader.style.display = 'block';
+        document.getElementById('export-gif-btn').disabled = true;
         
-        // Create PNG frames
+        // Load gif.js dynamically
+        const gifjsScript = document.createElement('script');
+        gifjsScript.src = 'https://cdn.jsdelivr.net/npm/gif.js/dist/gif.js';
+        document.body.appendChild(gifjsScript);
+        
+        await new Promise(resolve => {
+          gifjsScript.onload = resolve;
+        });
+        
+        // Create GIF
+        const gif = new GIF({
+          workers: 2,
+          quality: 10,
+          width: gridSize * 10,
+          height: gridSize * 10,
+          workerScript: 'https://cdn.jsdelivr.net/npm/gif.js/dist/gif.worker.js'
+        });
+
+        // Add frames
         for (let i = 0; i < frames.length; i++) {
           const frameCanvas = document.createElement('canvas');
           frameCanvas.width = gridSize * 10;
@@ -614,27 +690,28 @@
             }
           });
           
-          const frameData = await fetchFile(frameCanvas.toDataURL('image/png'));
-          ffmpeg.FS('writeFile', `frame${i}.png`, frameData);
+          gif.addFrame(frameCanvas, {delay: 200, copy: true});
         }
+
+        // Render GIF
+        gif.on('finished', (blob) => {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'pixel-art.gif';
+          link.click();
+          
+          // Clean up
+          loader.style.display = 'none';
+          document.getElementById('export-gif-btn').disabled = false;
+        });
+
+        gif.render();
         
-        // Run FFmpeg command
-        await ffmpeg.run(
-          '-framerate', '5',
-          '-i', 'frame%d.png',
-          '-f', 'gif',
-          'output.gif'
-        );
-        
-        // Download result
-        const data = ffmpeg.FS('readFile', 'output.gif');
-        const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/gif' }));
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'pixel-art.gif';
-        link.click();
       } catch (error) {
-        alert('Error exporting GIF: ' + error.message);
+        alert(`Error exporting GIF: ${error.message}`);
+        loader.style.display = 'none';
+        document.getElementById('export-gif-btn').disabled = false;
       }
     }
 
@@ -713,7 +790,7 @@
       document.getElementById('export-png-btn').addEventListener('click', exportPNG);
       document.getElementById('export-gif-btn').addEventListener('click', exportGIF);
       
-      // Canvas events
+      // Mouse events
       canvas.addEventListener('mousedown', startDrawing);
       canvas.addEventListener('mousemove', (e) => {
         updateBrushPreview(e);
@@ -721,6 +798,28 @@
       });
       canvas.addEventListener('mouseup', stopDrawing);
       canvas.addEventListener('mouseout', stopDrawing);
+      
+      // Touch events
+      canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        startDrawing(e);
+      });
+      canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        updateBrushPreview(e);
+        draw(e);
+      });
+      canvas.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        stopDrawing();
+      });
+      
+      // Prevent scrolling when touching canvas
+      document.addEventListener('touchmove', (e) => {
+        if (isDrawing) {
+          e.preventDefault();
+        }
+      }, { passive: false });
       
       // Keyboard shortcuts
       document.addEventListener('keydown', (e) => {
@@ -748,8 +847,5 @@
 
     init();
   </script>
-  
-  <!-- FFmpeg (loaded only when needed) -->
-  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 </body>
 </html>
